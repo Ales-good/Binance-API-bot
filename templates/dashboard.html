@@ -1,0 +1,42 @@
+<!-- templates/dashboard.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Бот-панель</title>
+</head>
+<body>
+    <h1>Торговые данные</h1>
+    <table border="1">
+        <tr>
+            <th>Параметр</th>
+            <th>Значение</th>
+        </tr>
+        <tr>
+            <td>Цена закрытия</td>
+            <td>{{ data['close_price'][-1] }}</td>
+        </tr>
+        <tr>
+            <td>SMA</td>
+            <td>{{ data['sma'][-1] }}</td>
+        </tr>
+        <tr>
+            <td>RSI</td>
+            <td>{{ data['rsi'][-1] }}</td>
+        </tr>
+        <tr>
+            <td>MACD</td>
+            <td>{{ data['macd'][-1] }}</td>
+        </tr>
+        <tr>
+            <td>Signal Line</td>
+            <td>{{ data['signal_line'][-1] }}</td>
+        </tr>
+        <tr>
+            <td>Bollinger Bands</td>
+            <td>Upper: {{ data['bollinger_upper'][-1] }}, Lower: {{ data['bollinger_lower'][-1] }}</td>
+        </tr>
+    </table>
+</body>
+</html>

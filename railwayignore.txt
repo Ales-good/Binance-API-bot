@@ -1,0 +1,15 @@
+Dockerfile
+docker-compose.yml
+.nixpacks/
+.git/
+.venv/
+__pycache__/
+*.log
+logs/
+data/
+models/
+*.pyc
+*.pyo
+.Python
+.ipynb_checkpoints
+.DS_Store
