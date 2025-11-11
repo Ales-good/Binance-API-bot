@@ -105,7 +105,24 @@ if 'RAILWAY_ENVIRONMENT' in os.environ:
     os.makedirs('models', exist_ok=True)
     os.makedirs('logs', exist_ok=True)
     os.makedirs('data', exist_ok=True)
-    
+
+
+# Проверка доступности библиотек технического анализа
+try:
+    import talib
+    TALIB_AVAILABLE = True
+    logger.info("TA-Lib successfully imported")
+except ImportError:
+    TALIB_AVAILABLE = False
+    logger.warning("TA-Lib not available")
+
+try:
+    import pandas_ta as ta
+    PANDAS_TA_AVAILABLE = True
+    logger.info("pandas-ta successfully imported")
+except ImportError:
+    PANDAS_TA_AVAILABLE = False
+    logger.warning("pandas-ta not available")
 # TA-Lib fallback
 try:
     import talib
@@ -178,16 +195,6 @@ class HyperparameterOptimizer:
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
     def objective(self, trial):
-        print(f"Shapes before training - x: {x.shape}, y: {y.shape}")  # Должно быть (N, features) и (N,)
-        assert y.ndim == 1, f"Y must be 1D, got {y.shape}"
-        params = {
-            'model_dim': trial.suggest_int('model_dim', 64, 256),
-            'num_heads': trial.suggest_int('num_heads', 2, 8),
-            'num_layers': trial.suggest_int('num_layers', 2, 6),
-            'learning_rate': trial.suggest_float('learning_rate', 1e-5, 1e-3, log=True),
-            'dropout': trial.suggest_float('dropout', 0.1, 0.5)
-        }
-    
         # 1. Получение и проверка данных
         x, y, _ = self.bot._prepare_transformer_data()
         if x is None or len(x) < 100:
@@ -199,6 +206,16 @@ class HyperparameterOptimizer:
     
         assert x.ndim == 3, f"Ожидается 3D массив [samples, seq_len, features], получено {x.shape}"
         assert y.ndim == 1, f"Ожидается 1D массив [samples], получено {y.shape}"
+        
+        print(f"Shapes before training - x: {x.shape}, y: {y.shape}")  # Должно быть (N, seq_len, features) и (N,)
+
+        params = {
+            'model_dim': trial.suggest_int('model_dim', 64, 256),
+            'num_heads': trial.suggest_int('num_heads', 2, 8),
+            'num_layers': trial.suggest_int('num_layers', 2, 6),
+            'learning_rate': trial.suggest_float('learning_rate', 1e-5, 1e-3, log=True),
+            'dropout': trial.suggest_float('dropout', 0.1, 0.5)
+        }
     
         # 3. Разделение данных
         tscv = TimeSeriesSplit(n_splits=3)
@@ -209,6 +226,7 @@ class HyperparameterOptimizer:
             x_train, x_val = x[train_idx], x[val_idx]
             y_train, y_val = y[train_idx], y[val_idx]
         
+            # Преобразование в тензоры с правильной формой
             x_train_tensor = torch.from_numpy(x_train).float().to(self.device)
             y_train_tensor = torch.from_numpy(y_train).float().to(self.device)
             x_val_tensor = torch.from_numpy(x_val).float().to(self.device)
@@ -232,112 +250,118 @@ class HyperparameterOptimizer:
                 optimizer.zero_grad()
             
                 outputs = model(x_train_tensor)
+                
+                # Проверка и корректировка размеров
+                if outputs.dim() == 1:
+                    outputs = outputs.unsqueeze(1)
+                if y_train_tensor.dim() == 1:
+                    y_train_tensor = y_train_tensor.unsqueeze(1)
+                
                 assert outputs.shape == y_train_tensor.shape, \
                     f"Несоответствие размеров: outputs {outputs.shape}, y {y_train_tensor.shape}"
             
                 loss = criterion(outputs, y_train_tensor)
                 loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
         
             # 7. Валидация
             model.eval()
             with torch.no_grad():
                 val_outputs = model(x_val_tensor)
-                val_loss = criterion(val_outputs, y_val_tensor)
-                val_losses.append(val_loss.item())
-    
-        return np.mean(val_losses)
-
-        # Гарантируем 2D форму
-        y = y.reshape(-1, 1)
-    
-        tscv = TimeSeriesSplit(n_splits=3)
-        val_losses = []
-    
-        for train_idx, val_idx in tscv.split(x):
-            x_train, x_val = x[train_idx], x[val_idx]
-            y_train, y_val = y[train_idx], y[val_idx]
-        
-            # Преобразование с явным контролем формы
-            x_train_tensor = torch.tensor(x_train, dtype=torch.float32).to(self.device)
-            y_train_tensor = torch.tensor(y_train, dtype=torch.float32).view(-1, 1).to(self.device)
-            x_val_tensor = torch.tensor(x_val, dtype=torch.float32).to(self.device)
-            y_val_tensor = torch.tensor(y_val, dtype=torch.float32).view(-1, 1).to(self.device)
-        
-            model = TransformerModel(
-                input_dim=x.shape[-1],
-                model_dim=params['model_dim'],
-                num_heads=params['num_heads'],
-                num_layers=params['num_layers'],
-                output_dim=1
-            ).to(self.device)
-        
-            optimizer = torch.optim.Adam(model.parameters(), lr=params['learning_rate'])
-            criterion = nn.MSELoss()
-        
-            # Обучение
-            model.train()
-            for epoch in range(10):
-                optimizer.zero_grad()
-    
-                # Явное преобразование с контролем формы
-                x_tensor = torch.tensor(x_train, dtype=torch.float32).to(self.device)
-                y_tensor = torch.tensor(y_train, dtype=torch.float32).reshape(-1, 1).to(self.device)  # Критично: reshape вместо unsqueeze
-    
-                outputs = model(x_tensor)
-    
-                # Принудительное выравнивание форм
-                outputs = outputs.view(-1, 1)
-                y_tensor = y_tensor.view(-1, 1)
-    
-                loss = criterion(outputs, y_tensor)
-                loss.backward()
-                optimizer.step()
-        
-            # Валидация
-            model.eval()
-            with torch.no_grad():
-                x_val_tensor = torch.tensor(x_val, dtype=torch.float32).to(self.device)
-                y_val_tensor = torch.tensor(y_val, dtype=torch.float32).reshape(-1, 1).to(self.device)
-    
-                val_outputs = model(x_val_tensor).view(-1, 1)
-                y_val_tensor = y_val_tensor.view(-1, 1)
-    
+                
+                # Корректировка размеров для валидации
+                if val_outputs.dim() == 1:
+                    val_outputs = val_outputs.unsqueeze(1)
+                if y_val_tensor.dim() == 1:
+                    y_val_tensor = y_val_tensor.unsqueeze(1)
+                
                 val_loss = criterion(val_outputs, y_val_tensor)
                 val_losses.append(val_loss.item())
     
         return np.mean(val_losses)
         
     def optimize(self, n_trials=50):
-        study = optuna.create_study(direction='minimize')
-        study.optimize(self.objective, n_trials=n_trials)
-        
-        # Сохраняем лучшие параметры
-        best_params = study.best_params
-        logger.info(f"Лучшие параметры: {best_params}")
-        
-        # Обновляем модель бота
-        self.bot.transformer_model = TransformerModel(
-            input_dim=10,
-            model_dim=best_params['model_dim'],
-            num_heads=best_params['num_heads'],
-            num_layers=best_params['num_layers'],
-            output_dim=1
-        )
-        
-        return best_params
-
-# 10. Настройка Rich и логирования
-from rich.console import Console
-from rich.logging import RichHandler
-
-# 11. Для Backtesting
-from typing import Dict, List
-from datetime import datetime
-
-# 12. Асинхронные методы обучения модели
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
+        """Оптимизация гиперпараметров"""
+        try:
+            study = optuna.create_study(
+                direction='minimize',
+                sampler=optuna.samplers.TPESampler(seed=42)
+            )
+            study.optimize(self.objective, n_trials=n_trials, show_progress_bar=True)
+            
+            # Сохраняем лучшие параметры
+            best_params = study.best_params
+            logger.info(f"Лучшие параметры: {best_params}")
+            
+            # Обновляем модель бота
+            self.bot.transformer_model = TransformerModel(
+                input_dim=10,  # Должно соответствовать количеству фичей
+                model_dim=best_params['model_dim'],
+                num_heads=best_params['num_heads'],
+                num_layers=best_params['num_layers'],
+                output_dim=1
+            )
+            
+            # Переобучаем модель с лучшими параметрами на всех данных
+            self._retrain_best_model(best_params)
+            
+            return best_params
+            
+        except Exception as e:
+            logger.error(f"Ошибка оптимизации гиперпараметров: {str(e)}", exc_info=True)
+            return None
+    
+    def _retrain_best_model(self, best_params):
+        """Переобучение модели с лучшими параметрами на всех данных"""
+        try:
+            x, y, _ = self.bot._prepare_transformer_data()
+            if x is None or y is None:
+                logger.error("Не удалось подготовить данные для переобучения")
+                return
+            
+            x_tensor = torch.from_numpy(x).float().to(self.device)
+            y_tensor = torch.from_numpy(y).float().to(self.device)
+            
+            if y_tensor.dim() == 1:
+                y_tensor = y_tensor.unsqueeze(1)
+            
+            model = TransformerModel(
+                input_dim=x.shape[-1],
+                model_dim=best_params['model_dim'],
+                num_heads=best_params['num_heads'],
+                num_layers=best_params['num_layers'],
+                output_dim=1
+            ).to(self.device)
+            
+            optimizer = torch.optim.Adam(model.parameters(), lr=best_params['learning_rate'])
+            criterion = nn.MSELoss()
+            
+            # Обучение на всех данных
+            model.train()
+            for epoch in range(20):
+                optimizer.zero_grad()
+                outputs = model(x_tensor)
+                
+                if outputs.dim() == 1:
+                    outputs = outputs.unsqueeze(1)
+                
+                loss = criterion(outputs, y_tensor)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                optimizer.step()
+                
+                if (epoch + 1) % 5 == 0:
+                    logger.info(f"Retraining epoch {epoch+1}/20, Loss: {loss.item():.4f}")
+            
+            # Сохраняем переобученную модель
+            self.bot.transformer_model = model.cpu()
+            self.bot.save_model()
+            
+            logger.info("Модель успешно переобучена с лучшими параметрами")
+            
+        except Exception as e:
+            logger.error(f"Ошибка переобучения модели: {str(e)}", exc_info=True)
 
 class SafeConsole(Console):
     """Переопределенный Console с обработкой ошибок вывода"""
