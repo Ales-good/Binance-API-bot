@@ -18,10 +18,42 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
 from rich.console import Console
 from rich.logging import RichHandler
 
+# 3. Определяем SafeConsole перед использованием
+class SafeConsole(Console):
+    """Переопределенный Console с обработкой ошибок вывода"""
+    def print(self, *args, **kwargs):
+        try:
+            super().print(*args, **kwargs)
+        except (ValueError, AttributeError):
+            sys.stdout.write(str(args) + "\n")
 
+# 4. Настройка логирования
+def configure_logging():
+    """Безопасная настройка системы логирования"""
+    # Создаем кастомный обработчик для Rich
+    class SafeRichHandler(RichHandler):
+        def emit(self, record):
+            try:
+                super().emit(record)
+            except:
+                # Fallback на базовое логирование
+                sys.stderr.write(f"{record.levelname}: {record.msg}\n")
 
-
-
+    # Конфигурация
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler('bot.log', encoding='utf-8', mode='w'),
+            SafeRichHandler(
+                console=SafeConsole(force_terminal=False),
+                show_path=False,
+                rich_tracebacks=True
+            )
+        ],
+        force=True
+    )
+    logging.captureWarnings(True)
 
 # 5. Инициализация логгера и консоли
 configure_logging()
@@ -54,25 +86,13 @@ matplotlib.use('Agg')  # Неинтерактивный бэкенд
 import matplotlib.pyplot as plt
 
 # 9. Импорт остальных библиотек
-import requests
-import pandas as pd
-import numpy as np
-from dotenv import load_dotenv
-import talib
-import torch
-import torch.nn as nn
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler
-from binance import ThreadedWebsocketManager
-from binance.client import Client
 from binance.enums import *
 from binance.exceptions import BinanceAPIException
 from io import BytesIO
-
 from matplotlib.animation import FuncAnimation
 import optuna
 from sklearn.model_selection import TimeSeriesSplit
-
 
 # Railway-specific fixes
 import os
