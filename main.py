@@ -1820,74 +1820,193 @@ class AggressiveFuturesBot:
         self.best_params = study.best_params
 
     def _calculate_indicators(self):
-        """Расчет всех индикаторов с fallback на pure Python"""
+        """Расчет всех индикаторов с использованием pandas-ta"""
         try:
-            if not TALIB_AVAILABLE:
-                logger.warning("Using pure Python indicator implementations")
-        
+            import pandas_ta as ta
+            
             # Проверка наличия базовых колонок
             required_cols = ['open', 'high', 'low', 'close', 'volume']
             if not all(col in self.data.columns for col in required_cols):
                 raise ValueError("Отсутствуют базовые колонки OHLCV")
 
-            # Рассчитываем все индикаторы
-            closes = self.data['close'].ffill().values
-            highs = self.data['high'].ffill().values
-            lows = self.data['low'].ffill().values
-            volumes = self.data['volume'].fillna(0).values
+            # Рассчитываем все индикаторы с помощью pandas-ta
+            closes = self.data['close']
+            highs = self.data['high']
+            lows = self.data['low']
+            volumes = self.data['volume']
 
-            # MACD (возвращает macd, signal, hist)
-            macd, macd_signal, _ = talib.MACD(closes)
-            self.data['macd'] = macd
-            self.data['macd_signal'] = macd_signal  # Это критически важная строка
-        
-            # Другие индикаторы (остальной код из предыдущего решения)
-            self.data['rsi'] = talib.RSI(closes, timeperiod=14)
-            self.data['atr'] = talib.ATR(highs, lows, closes, timeperiod=14)
-            self.data['obv'] = talib.OBV(closes, volumes)
-        
+            # MACD (возвращает DataFrame с несколькими колонками)
+            macd_result = ta.macd(closes, fast=12, slow=26, signal=9)
+            if macd_result is not None:
+                self.data['macd'] = macd_result[f'MACD_12_26_9']
+                self.data['macd_signal'] = macd_result[f'MACDs_12_26_9']
+                # macd_hist = macd_result[f'MACDh_12_26_9']  # гистограмму можно тоже сохранить если нужно
+
+            # RSI
+            rsi_result = ta.rsi(closes, length=14)
+            if rsi_result is not None:
+                self.data['rsi'] = rsi_result
+
+            # ATR (Average True Range)
+            atr_result = ta.atr(highs, lows, closes, length=14)
+            if atr_result is not None:
+                self.data['atr'] = atr_result
+
+            # OBV (On Balance Volume)
+            obv_result = ta.obv(closes, volumes)
+            if obv_result is not None:
+                self.data['obv'] = obv_result
+
             # Stochastic
-            slowk, slowd = talib.STOCH(highs, lows, closes,
-                                      fastk_period=5, slowk_period=3,
-                                      slowd_period=3, slowk_matype=0, slowd_matype=0)
-            self.data['stoch_k'] = slowk
-            self.data['stoch_d'] = slowd
-        
-            # Остальные индикаторы
-            self.data['cci'] = talib.CCI(highs, lows, closes, timeperiod=14)
-            upper, middle, lower = talib.BBANDS(closes, timeperiod=20)
-            self.data['bbands_middle'] = middle
-            self.data['adx'] = talib.ADX(highs, lows, closes, timeperiod=14)
-        
-            # EMA
-            self.data['ema5'] = self.data['close'].ewm(span=5, adjust=False).mean()
-            self.data['ema10'] = self.data['close'].ewm(span=10, adjust=False).mean()
-        
+            stoch_result = ta.stoch(highs, lows, closes, k=14, d=3, smooth_k=3)
+            if stoch_result is not None:
+                self.data['stoch_k'] = stoch_result['STOCHk_14_3_3']
+                self.data['stoch_d'] = stoch_result['STOCHd_14_3_3']
+
+            # CCI (Commodity Channel Index)
+            cci_result = ta.cci(highs, lows, closes, length=14)
+            if cci_result is not None:
+                self.data['cci'] = cci_result
+
+            # Bollinger Bands
+            bb_result = ta.bbands(closes, length=20, std=2)
+            if bb_result is not None:
+                self.data['bbands_upper'] = bb_result['BBU_20_2.0']
+                self.data['bbands_middle'] = bb_result['BBM_20_2.0']
+                self.data['bbands_lower'] = bb_result['BBL_20_2.0']
+
+            # ADX (Average Directional Index)
+            adx_result = ta.adx(highs, lows, closes, length=14)
+            if adx_result is not None:
+                self.data['adx'] = adx_result['ADX_14']
+
+            # EMA (Exponential Moving Average)
+            ema5_result = ta.ema(closes, length=5)
+            if ema5_result is not None:
+                self.data['ema5'] = ema5_result
+
+            ema10_result = ta.ema(closes, length=10)
+            if ema10_result is not None:
+                self.data['ema10'] = ema10_result
+
             # Volume indicators
-            self.data['volume_ma'] = self.data['volume'].rolling(20).mean()
-            self.data['volume_spike'] = (self.data['volume'] > 1.5 * self.data['volume_ma']).astype(int)
-        
+            self.data['volume_ma'] = volumes.rolling(20).mean()
+            self.data['volume_spike'] = (volumes > 1.5 * self.data['volume_ma']).astype(int)
+
+            # VWAP (Volume Weighted Average Price)
+            # Для VWAP нужно использовать отдельную функцию, так как pandas-ta требует high, low, close, volume
+            vwap_result = ta.vwap(highs, lows, closes, volumes)
+            if vwap_result is not None:
+                self.data['vwap'] = vwap_result
+            else:
+                # Fallback расчет VWAP
+                typical_price = (highs + lows + closes) / 3
+                self.data['vwap'] = (typical_price * volumes).cumsum() / volumes.cumsum()
+
+            # Дополнительные индикаторы для улучшения стратегии
+            # Williams %R
+            willr_result = ta.willr(highs, lows, closes, length=14)
+            if willr_result is not None:
+                self.data['willr'] = willr_result
+
+            # Momentum
+            momentum_result = ta.mom(closes, length=10)
+            if momentum_result is not None:
+                self.data['momentum'] = momentum_result
+
+            # Rate of Change (ROC)
+            roc_result = ta.roc(closes, length=12)
+            if roc_result is not None:
+                self.data['roc'] = roc_result
+
+            # Заполнение NaN значений
+            self.data = self.data.ffill().bfill().fillna(0)
+
+            # Проверка наличия всех необходимых колонок
+            required_indicators = [
+                'macd', 'macd_signal', 'rsi', 'stoch_k', 'stoch_d', 
+                'cci', 'bbands_middle', 'adx', 'ema5', 'ema10',
+                'volume_spike', 'vwap'
+            ]
+            
+            # Создаем отсутствующие колонки с нулевыми значениями
+            for indicator in required_indicators:
+                if indicator not in self.data.columns:
+                    logger.warning(f"Индикатор {indicator} не рассчитан, создаю нулевую колонку")
+                    self.data[indicator] = 0.0
+
+            missing = [ind for ind in required_indicators if ind not in self.data.columns]
+            if missing:
+                logger.warning(f"Отсутствуют индикаторы: {missing}")
+
+            logger.info("Все индикаторы успешно рассчитаны с помощью pandas-ta")
+            return True
+            
+        except ImportError:
+            logger.error("pandas-ta не установлен. Использую базовые индикаторы.")
+            return self._calculate_basic_indicators()
+        except Exception as e:
+            logger.error(f"Ошибка расчета индикаторов с pandas-ta: {str(e)}", exc_info=True)
+            return False
+
+    def _calculate_basic_indicators(self):
+        """Резервный метод расчета базовых индикаторов без внешних библиотек"""
+        try:
+            # Базовые индикаторы на чистом pandas
+            closes = self.data['close']
+            highs = self.data['high']
+            lows = self.data['low']
+            volumes = self.data['volume']
+
+            # EMA
+            self.data['ema5'] = closes.ewm(span=5, adjust=False).mean()
+            self.data['ema10'] = closes.ewm(span=10, adjust=False).mean()
+
+            # RSI (упрощенная версия)
+            delta = closes.diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+            rs = gain / loss
+            self.data['rsi'] = 100 - (100 / (1 + rs))
+
+            # MACD (упрощенная версия)
+            ema12 = closes.ewm(span=12, adjust=False).mean()
+            ema26 = closes.ewm(span=26, adjust=False).mean()
+            self.data['macd'] = ema12 - ema26
+            self.data['macd_signal'] = self.data['macd'].ewm(span=9, adjust=False).mean()
+
+            # Bollinger Bands
+            self.data['bbands_middle'] = closes.rolling(window=20).mean()
+            bb_std = closes.rolling(window=20).std()
+            self.data['bbands_upper'] = self.data['bbands_middle'] + (bb_std * 2)
+            self.data['bbands_lower'] = self.data['bbands_middle'] - (bb_std * 2)
+
+            # Volume indicators
+            self.data['volume_ma'] = volumes.rolling(20).mean()
+            self.data['volume_spike'] = (volumes > 1.5 * self.data['volume_ma']).astype(int)
+
             # VWAP
             typical_price = (highs + lows + closes) / 3
             self.data['vwap'] = (typical_price * volumes).cumsum() / volumes.cumsum()
-        
-            # Заполнение NaN
+
+            # Stochastic (упрощенная версия)
+            lowest_low = lows.rolling(window=14).min()
+            highest_high = highs.rolling(window=14).max()
+            self.data['stoch_k'] = 100 * ((closes - lowest_low) / (highest_high - lowest_low))
+            self.data['stoch_d'] = self.data['stoch_k'].rolling(window=3).mean()
+
+            # Заполняем остальные обязательные колонки нулями
+            for col in ['atr', 'obv', 'cci', 'adx']:
+                if col not in self.data.columns:
+                    self.data[col] = 0.0
+
             self.data = self.data.ffill().bfill().fillna(0)
-        
-            # Проверка наличия всех необходимых колонок
-            required_indicators = ['macd', 'macd_signal', 'rsi', 'stoch_k', 'stoch_d', 
-                                 'cci', 'bbands_middle', 'adx', 'ema5', 'ema10',
-                                 'volume_spike', 'vwap']
-        
-            missing = [ind for ind in required_indicators if ind not in self.data.columns]
-            if missing:
-                raise ValueError(f"Отсутствуют индикаторы: {missing}")
-        
-            logger.info("Все индикаторы успешно рассчитаны")
+            
+            logger.info("Базовые индикаторы рассчитаны с помощью pandas")
             return True
-        
+            
         except Exception as e:
-            logger.error(f"Ошибка расчета индикаторов: {str(e)}", exc_info=True)
+            logger.error(f"Ошибка расчета базовых индикаторов: {str(e)}", exc_info=True)
             return False
 
     def _calculate_extended_indicators(self):
