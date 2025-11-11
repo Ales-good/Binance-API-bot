@@ -1,0 +1,14 @@
+.git
+.gitignore
+README.md
+.env
+*.log
+logs/
+data/
+models/
+__pycache__/
+*.pyc
+*.pyo
+.Python
+.ipynb_checkpoints
+.DS_Store
