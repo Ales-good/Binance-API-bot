@@ -10,4 +10,4 @@ requests==2.31.0
 optuna==3.3.0
 flask==2.3.3
 websocket-client==1.6.1
-TA-Lib==0.4.28
+pandas-ta==0.3.14b0  # Альтернатива TA-Lib
