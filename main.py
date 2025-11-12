@@ -1212,21 +1212,19 @@ class AggressiveFuturesBot:
             logger.error(f"Ошибка соединения с API: {str(e)}")
             return False
     def _setup_leverage(self):
-        """Настройка кредитного плеча с обработкой ошибок времени"""
+        """Настройка кредитного плеча с обработкой ошибок"""
         try:
-            # Получаем текущее время сервера для точной синхронизации
-            server_time = self.client.get_server_time()['serverTime']
-            time_diff = int(time.time() * 1000) - server_time
-
-            return self._retry_api_call(
+            result = self._retry_api_call(
                 self.client.futures_change_leverage,
                 symbol=self.symbol,
-                leverage=self.leverage,
-                timestamp=server_time - time_diff  # Используем скорректированное время
-        )
+                leverage=self.leverage
+            )
+            logger.info(f"✅ Плечо установлено на {self.leverage}x")
+            return True
         except Exception as e:
-            logger.error(f"Ошибка установки плеча: {str(e)}", exc_info=True)
-            return False
+            logger.warning(f"⚠️ Не удалось установить плечо: {e}")
+            logger.info("💡 Продолжаю работу с плечом по умолчанию")
+            return True  # Продолжаем работу даже без настройки плеча
             
     def _get_symbol_info(self):
         """Получение информации о торговой паре"""
