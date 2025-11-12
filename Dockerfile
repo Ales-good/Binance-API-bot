@@ -11,7 +11,12 @@ WORKDIR /app
 
 # Копируем requirements первыми для кэширования
 COPY requirements.txt .
-RUN pip install --upgrade pip
+RUN pip install --upgrade pip setuptools wheel
+
+# Сначала устанавливаем базовые пакеты
+RUN pip install pandas numpy matplotlib scikit-learn requests python-dotenv
+
+# Затем устанавливаем остальные из requirements
 RUN pip install -r requirements.txt
 
 # Копируем остальные файлы
