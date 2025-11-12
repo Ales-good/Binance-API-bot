@@ -17,6 +17,19 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
 from rich.console import Console
 from rich.logging import RichHandler
 
+# Добавьте эти импорты сюда:
+import shap
+import lime
+import lime.lime_tabular
+
+# 11. Для Backtesting
+from typing import Dict, List
+from datetime import datetime
+
+# 12. Асинхронные методы обучения модели
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+
 # 3. Определяем SafeConsole перед использованием
 class SafeConsole(Console):
     """Переопределенный Console с обработкой ошибок вывода"""
@@ -212,7 +225,7 @@ class HyperparameterOptimizer:
                 val_loss = criterion(val_outputs, y_val_tensor)
                 val_losses.append(val_loss.item())
     
-        return np.mean(val_losses)
+            return np.mean(val_losses)
 
         # Гарантируем 2D форму
         y = y.reshape(-1, 1)
@@ -292,18 +305,6 @@ class HyperparameterOptimizer:
         )
         
         return best_params
-
-# 10. Настройка Rich и логирования
-from rich.console import Console
-from rich.logging import RichHandler
-
-# 11. Для Backtesting
-from typing import Dict, List
-from datetime import datetime
-
-# 12. Асинхронные методы обучения модели
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
 
 class SafeConsole(Console):
     """Переопределенный Console с обработкой ошибок вывода"""
