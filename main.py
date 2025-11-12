@@ -688,7 +688,6 @@ class AggressiveFuturesBot:
                 raise ValueError("API ключи не найдены в переменных окружения")
             
             logger.info(f"API Key: {api_key[:10]}...")
-            logger.info(f"Secret Key: {secret_key[:10]}...")
             
             # Пробуем подключиться к Binance
             try:
@@ -696,17 +695,31 @@ class AggressiveFuturesBot:
                 # Тестовый запрос для проверки подключения
                 self.client.futures_exchange_info()
                 logger.info("✅ Подключение к Binance Futures успешно")
+                
+                # Проверяем баланс фьючерсного аккаунта
+                time.sleep(1)
+                account_info = self.client.futures_account()
+                balance = float(account_info['totalWalletBalance'])
+                
+                if balance <= 0:
+                    logger.warning(f"⚠️ На фьючерсном аккаунте нет средств: {balance} USDT")
+                    logger.info("💡 Пополните фьючерсный аккаунт через Binance App/Website")
+                    # Продолжаем работу, но предупреждаем что торговля невозможна
+                else:
+                    logger.info(f"✅ Баланс фьючерсного аккаунта: {balance:.2f} USDT")
+                    
             except Exception as e:
                 logger.error(f"❌ Ошибка подключения к Futures: {e}")
                 # Пробуем testnet для диагностики
                 try:
+                    logger.info("🔄 Пробуем подключиться к Testnet...")
                     self.client = Client(api_key, secret_key, testnet=True)
                     self.client.futures_exchange_info()
                     logger.info("✅ Подключение к Binance Testnet успешно")
                     logger.warning("⚠️ Используется TESTNET для отладки")
                 except Exception as testnet_error:
                     logger.error(f"❌ Ошибка подключения к Testnet: {testnet_error}")
-                    raise ValueError("Не удалось подключиться ни к mainnet, ни к testnet. Проверьте API ключи.")
+                    raise ValueError("Не удалось подключиться ни к mainnet, ни к testnet")
             
             self.ws_manager = ThreadedWebsocketManager(
                 api_key=api_key,
