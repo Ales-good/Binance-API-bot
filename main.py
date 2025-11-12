@@ -674,13 +674,13 @@ class AggressiveFuturesBot:
             
     def __init__(self):
         """Инициализация агрессивного торгового бота"""
-        self.executor = ThreadPoolExecutor(max_workers=2)  # Пул потоков
+        self.executor = ThreadPoolExecutor(max_workers=2)
         self.loop = asyncio.get_event_loop()
+        
         try:
             load_dotenv()
             self._check_env_vars()
             
-            # Проверяем API ключи перед созданием клиента
             api_key = os.getenv('BINANCE_API_KEY')
             secret_key = os.getenv('BINANCE_SECRET_KEY')
             
@@ -689,37 +689,16 @@ class AggressiveFuturesBot:
             
             logger.info(f"API Key: {api_key[:10]}...")
             
-            # Пробуем подключиться к Binance
+            # ТОЛЬКО MAINNET - никакого testnet!
+            self.client = Client(api_key, secret_key, testnet=False)
+            
+            # Простая проверка подключения
             try:
-                self.client = Client(api_key, secret_key, testnet=False)
-                # Тестовый запрос для проверки подключения
                 self.client.futures_exchange_info()
-                logger.info("✅ Подключение к Binance Futures успешно")
-                
-                # Проверяем баланс фьючерсного аккаунта
-                time.sleep(1)
-                account_info = self.client.futures_account()
-                balance = float(account_info['totalWalletBalance'])
-                
-                if balance <= 0:
-                    logger.warning(f"⚠️ На фьючерсном аккаунте нет средств: {balance} USDT")
-                    logger.info("💡 Пополните фьючерсный аккаунт через Binance App/Website")
-                    # Продолжаем работу, но предупреждаем что торговля невозможна
-                else:
-                    logger.info(f"✅ Баланс фьючерсного аккаунта: {balance:.2f} USDT")
-                    
+                logger.info("✅ Binance API доступен")
             except Exception as e:
-                logger.error(f"❌ Ошибка подключения к Futures: {e}")
-                # Пробуем testnet для диагностики
-                try:
-                    logger.info("🔄 Пробуем подключиться к Testnet...")
-                    self.client = Client(api_key, secret_key, testnet=True)
-                    self.client.futures_exchange_info()
-                    logger.info("✅ Подключение к Binance Testnet успешно")
-                    logger.warning("⚠️ Используется TESTNET для отладки")
-                except Exception as testnet_error:
-                    logger.error(f"❌ Ошибка подключения к Testnet: {testnet_error}")
-                    raise ValueError("Не удалось подключиться ни к mainnet, ни к testnet")
+                logger.error(f"❌ Ошибка API: {e}")
+                raise
             
             self.ws_manager = ThreadedWebsocketManager(
                 api_key=api_key,
@@ -728,15 +707,15 @@ class AggressiveFuturesBot:
             
             # Агрессивные параметры торговли
             self.symbol = "BTCUSDT"
-            self.leverage = 30  # среднее плечо
-            self.interval = Client.KLINE_INTERVAL_5MINUTE  # Более короткий таймфрейм
-            self.risk_percent = 0.3  # Средний риск на сделку
-            self.take_profit = 0.01  # 1.0% тейк-профит
-            self.stop_loss = 0.01  # 1.0% стоп-лосс
+            self.leverage = 100
+            self.interval = Client.KLINE_INTERVAL_5MINUTE
+            self.risk_percent = 0.3
+            self.take_profit = 0.01
+            self.stop_loss = 0.01
             self.max_retries = 3
-            self.retry_delay = 2  # Уменьшенная задержка между попытками
-            self.data_window_size = 1500  # Оптимальный размер окна данных
-            self.min_training_samples = 3500  # Минимум свечей для обучения
+            self.retry_delay = 2
+            self.data_window_size = 1500
+            self.min_training_samples = 3500
             
             # Состояние бота
             self.current_position = None
@@ -753,28 +732,27 @@ class AggressiveFuturesBot:
             self.transformer_model = None
             self.scaler = None
             
-            # Инициализация модели - только ОДИН раз
+            # Инициализация модели
             try:
                 if self.load_model():
                     logger.info("✅ Модель успешно загружена")
                 else:
-                    logger.warning("Файл модели не найден, создаю новую модель")
                     self._init_new_model()
             except Exception as e:
                 logger.warning(f"Не удалось загрузить модель: {str(e)}")
                 self._init_new_model()
             
-            self.min_qty = 0.001  # Минимальный размер ордера для BTCUSDT
+            self.min_qty = 0.001
             
-            # Настройка обработчиков сигналов
+            # Обработчики сигналов
             signal.signal(signal.SIGINT, self._handle_shutdown)
             signal.signal(signal.SIGTERM, self._handle_shutdown)
             
-            logger.info("Агрессивный-осторожный бот инициализирован")
+            logger.info("🤖 Агрессивный бот инициализирован для MAINNET")
             
         except Exception as e:
             logger.error(f"Ошибка инициализации: {str(e)}", exc_info=True)
-            self._send_telegram_alert(f"❌ Ошибка инициализации агрессивного бота: {str(e)}")
+            self._send_telegram_alert(f"❌ Ошибка инициализации бота: {str(e)}")
             raise
 
     def load_historical_data(self, days=30):
@@ -905,22 +883,15 @@ class AggressiveFuturesBot:
             return e.status_code == 403
     
     def check_connection(self):
-        """Комплексная проверка соединения"""
-        checks = {
-            'Интернет': self._check_internet(),
-            'API Keys': self.verify_api_keys(),
-            'Статус API': self.check_api_status(),
-            'IP блокировка': not self.is_ip_banned()
-        }
-
-        if not all(checks.values()):
-            error_msg = "Проблемы соединения:\n" + "\n".join(
-                f"{k}: {'✔' if v else '✖'}" for k, v in checks.items()
-            )
-            logger.error(error_msg)
-            self._send_telegram_alert(error_msg)
+        """Упрощенная проверка соединения"""
+        try:
+            # Простая проверка - можем ли мы получить данные
+            self.client.get_server_time()
+            logger.info("✅ Соединение с Binance установлено")
+            return True
+        except Exception as e:
+            logger.error(f"❌ Ошибка соединения: {e}")
             return False
-        return True
 
     def _check_websocket(self):
         """Проверка состояния WebSocket"""
@@ -1234,14 +1205,8 @@ class AggressiveFuturesBot:
         """Проверка работоспособности API"""
         try:
             if not self.client:
-                logger.error("Клиент API не инициализирован")
                 return False
-            # Простой тестовый запрос
-            server_time = self.client.get_server_time()
-            if not server_time:
-                logger.error("Не удалось получить время сервера")
-                return False
-            
+            self.client.get_server_time()
             return True
         except Exception as e:
             logger.error(f"Ошибка соединения с API: {str(e)}")
@@ -2913,17 +2878,18 @@ class AggressiveFuturesBot:
         """Запуск бота с проверкой соединения"""
         try:
             # Проверка версии библиотеки
-            self._check_binance_version()           
-            # Явная проверка модели перед запуском
+            self._check_binance_version()
+            
+            # Проверка модели
             model_path = 'transformer_model.pth'
             if not os.path.exists(model_path):
                 logger.warning("Файл модели не найден, инициализирую новую...")
                 if not hasattr(self, 'transformer_model') or self.transformer_model is None:
                     self._init_new_model()
-                self.save_model()  # Сразу сохраняем новую модель
+                self.save_model()
                 logger.info(f"Новая модель сохранена в {os.path.abspath(model_path)}")
 
-            # Проверка соединения
+            # Проверка соединения с API
             if not self._check_api_connection():
                 self._send_telegram_alert("❌ Ошибка соединения с Binance API")
                 return False
@@ -2932,6 +2898,48 @@ class AggressiveFuturesBot:
                 logger.error("Не удалось подключиться к Binance API")
                 self._send_telegram_alert("❌ Критическая ошибка: проверьте соединение и API-ключи")
                 return False
+
+            # Настройка плеча и информации об аккаунте
+            if not self._setup_leverage():
+                logger.error("Не удалось настроить плечо")
+                return False
+                
+            if not self._update_account_info():
+                logger.error("Не удалось обновить информацию об аккаунте")
+                return False
+
+            # Получение информации о символе
+            if not self._get_symbol_info():
+                logger.error("Не удалось получить информацию о символе")
+                return False
+
+            # Загрузка начальных данных
+            try:
+                klines = self._retry_api_call(
+                    self.client.futures_klines,
+                    symbol=self.symbol,
+                    interval=self.interval,
+                    limit=self.data_window_size
+                )
+                
+                for k in klines:
+                    self.data.loc[len(self.data)] = {
+                        'open': float(k[1]),
+                        'high': float(k[2]),
+                        'low': float(k[3]),
+                        'close': float(k[4]),
+                        'volume': float(k[5])
+                    }
+                logger.info(f"Загружено {len(klines)} начальных свечей")
+            except Exception as e:
+                logger.error(f"Ошибка загрузки начальных данных: {e}")
+                return False
+
+            # Обучение модели если нужно
+            if len(self.data) > 100 and (not hasattr(self, 'transformer_model') or self.transformer_model is None):
+                logger.info("Обнаружены данные, но нет модели. Запускаю обучение...")
+                if not self.train_model(epochs=5):  # Ускоренное обучение
+                    logger.warning("Не удалось обучить модель, продолжаю без ML")
 
             # Попытки подключения WebSocket
             max_attempts = 3
@@ -2943,73 +2951,22 @@ class AggressiveFuturesBot:
                     logger.warning(f"Попытка {attempt} из {max_attempts} не удалась. Повтор через 5 сек...")
                     time.sleep(5)
             else:
-                raise ConnectionError(f"Не удалось подключиться после {max_attempts} попыток")
-        
-            # Проверка соединения
-            if not self.is_websocket_connected():
-                raise ConnectionError("WebSocket не активен после подключения")
-            
-            logger.info("Бот успешно запущен")
-            return True
-
-            # Настройка плеча и информации об аккаунте
-            if not self._setup_leverage() or not self._update_account_info():
+                logger.error(f"Не удалось подключиться после {max_attempts} попыток")
                 return False
-
-            # Получение информации о символе
-            self._get_symbol_info()
-
-            # Загрузка начальных данных
-            klines = self._retry_api_call(
-                self.client.futures_klines,
-                symbol=self.symbol,
-                interval=self.interval,
-                limit=self.data_window_size
-            )
         
-            for k in klines:
-                self.data.loc[len(self.data)] = {
-                    'open': float(k[1]),
-                    'high': float(k[2]),
-                    'low': float(k[3]),
-                    'close': float(k[4]),
-                    'volume': float(k[5])
-                }
-            # Обучение на исторических данных:
-            if len(self.data) > 100 and (not hasattr(self, 'transformer_model') or self.transformer_model is None):
-                logger.info("Обнаружены данные, но нет модели. Запускаю обучение...")
-                if not self.train_model(epochs=10):  # Ускоренное обучение
-                    logger.error("Не удалось обучить модель")
-            # Работа с моделью
-            if not hasattr(self, 'transformer_model') or self.transformer_model is None:
-                self.load_model()  # Попытка загрузить существующую модель
-
-            if len(self.data) > 100 and (not hasattr(self, 'transformer_model') or self.transformer_model is None):
-                logger.info("Начинаю обучение модели на исторических данных...")
-                if self._train_transformer_model():
-                    self.save_model()
-                    logger.info("Модель успешно обучена и сохранена")
-                else:
-                    logger.warning("Не удалось обучить модель")
-
-            # Финальные проверки перед запуском
+            # Проверка WebSocket соединения
+            if not self.is_websocket_connected():
+                logger.error("WebSocket не активен после подключения")
+                return False
+            
+            # Финальные проверки
             required_attrs = ['transformer_model', 'client', 'ws_manager']
             missing = [attr for attr in required_attrs if not hasattr(self, attr)]
             if missing:
                 logger.error(f"Отсутствуют критичные атрибуты: {missing}")
                 return False
             
-            # Добавить проверку:
-            logger.info(f"Первые 3 строки данных:\n{self.data.head(3).to_string()}")
-            logger.info(f"Последние 3 строки данных:\n{self.data.tail(3).to_string()}")
-            logger.info(f"Проверка NaN: {self.data.isnull().sum()}")
-            
-            # Запуск WebSocket
-            if not self.start_websocket():
-                logger.error("Не удалось запустить WebSocket")
-                return False
-
-            # Логирование успешного запуска
+            # Логирование состояния
             logger.info(f"""Бот успешно инициализирован:
             ┌ Модель: {'загружена' if hasattr(self, 'transformer_model') and self.transformer_model is not None else 'не загружена'}
             ├ Свечей в памяти: {len(self.data)}
@@ -3017,11 +2974,6 @@ class AggressiveFuturesBot:
             └ Плечо: {self.leverage}x
             """)
 
-            # После всех проверок
-            if not os.path.exists('transformer_model.pth'):
-                logger.warning("Принудительно сохраняю модель...")
-                self.save_model()
-    
             # Отправка уведомления о запуске
             start_msg = (
                 f"🤖 <b>Агрессивный бот запущен</b>\n"
@@ -3036,7 +2988,7 @@ class AggressiveFuturesBot:
             )
         
             self._send_telegram_alert(start_msg)
-            logger.info(f"Агрессивный бот запущен для {self.symbol}")
+            logger.info(f"✅ Агрессивный бот запущен для {self.symbol}")
             return True
 
         except Exception as e:
