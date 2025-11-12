@@ -18,42 +18,10 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
 from rich.console import Console
 from rich.logging import RichHandler
 
-# 3. Определяем SafeConsole перед использованием
-class SafeConsole(Console):
-    """Переопределенный Console с обработкой ошибок вывода"""
-    def print(self, *args, **kwargs):
-        try:
-            super().print(*args, **kwargs)
-        except (ValueError, AttributeError):
-            sys.stdout.write(str(args) + "\n")
 
-# 4. Настройка логирования
-def configure_logging():
-    """Безопасная настройка системы логирования"""
-    # Создаем кастомный обработчик для Rich
-    class SafeRichHandler(RichHandler):
-        def emit(self, record):
-            try:
-                super().emit(record)
-            except:
-                # Fallback на базовое логирование
-                sys.stderr.write(f"{record.levelname}: {record.msg}\n")
 
-    # Конфигурация
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.FileHandler('bot.log', encoding='utf-8', mode='w'),
-            SafeRichHandler(
-                console=SafeConsole(force_terminal=False),
-                show_path=False,
-                rich_tracebacks=True
-            )
-        ],
-        force=True
-    )
-    logging.captureWarnings(True)
+
+
 
 # 5. Инициализация логгера и консоли
 configure_logging()
@@ -86,13 +54,25 @@ matplotlib.use('Agg')  # Неинтерактивный бэкенд
 import matplotlib.pyplot as plt
 
 # 9. Импорт остальных библиотек
+import requests
+import pandas as pd
+import numpy as np
+from dotenv import load_dotenv
+import talib
+import torch
+import torch.nn as nn
 from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler
+from binance import ThreadedWebsocketManager
+from binance.client import Client
 from binance.enums import *
 from binance.exceptions import BinanceAPIException
 from io import BytesIO
+
 from matplotlib.animation import FuncAnimation
 import optuna
 from sklearn.model_selection import TimeSeriesSplit
+
 
 # Railway-specific fixes
 import os
@@ -105,32 +85,23 @@ if 'RAILWAY_ENVIRONMENT' in os.environ:
     os.makedirs('models', exist_ok=True)
     os.makedirs('logs', exist_ok=True)
     os.makedirs('data', exist_ok=True)
-
-
-# Проверка доступности библиотек технического анализа
+    
+# TA-Lib fallback with ta alternative
 try:
     import talib
     TALIB_AVAILABLE = True
     logger.info("TA-Lib successfully imported")
 except ImportError:
-    TALIB_AVAILABLE = False
-    logger.warning("TA-Lib not available")
-
-try:
-    import pandas_ta as ta
-    PANDAS_TA_AVAILABLE = True
-    logger.info("pandas-ta successfully imported")
-except ImportError:
-    PANDAS_TA_AVAILABLE = False
-    logger.warning("pandas-ta not available")
-# TA-Lib fallback
-try:
-    import talib
-    TALIB_AVAILABLE = True
-    logger.info("TA-Lib successfully imported")
-except ImportError:
-    TALIB_AVAILABLE = False
-    logger.warning("TA-Lib not available, using pure Python implementations")
+    try:
+        # Используем ta как альтернативу
+        import ta
+        TALIB_AVAILABLE = False
+        TA_AVAILABLE = True
+        logger.info("TA-Lib not available, using 'ta' library instead")
+    except ImportError:
+        TALIB_AVAILABLE = False
+        TA_AVAILABLE = False
+        logger.warning("Neither TA-Lib nor ta available, using pure Python implementations")
     
     # Pure Python implementations
     def calculate_rsi_python(prices, period=14):
@@ -195,6 +166,16 @@ class HyperparameterOptimizer:
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         
     def objective(self, trial):
+        print(f"Shapes before training - x: {x.shape}, y: {y.shape}")  # Должно быть (N, features) и (N,)
+        assert y.ndim == 1, f"Y must be 1D, got {y.shape}"
+        params = {
+            'model_dim': trial.suggest_int('model_dim', 64, 256),
+            'num_heads': trial.suggest_int('num_heads', 2, 8),
+            'num_layers': trial.suggest_int('num_layers', 2, 6),
+            'learning_rate': trial.suggest_float('learning_rate', 1e-5, 1e-3, log=True),
+            'dropout': trial.suggest_float('dropout', 0.1, 0.5)
+        }
+    
         # 1. Получение и проверка данных
         x, y, _ = self.bot._prepare_transformer_data()
         if x is None or len(x) < 100:
@@ -206,16 +187,6 @@ class HyperparameterOptimizer:
     
         assert x.ndim == 3, f"Ожидается 3D массив [samples, seq_len, features], получено {x.shape}"
         assert y.ndim == 1, f"Ожидается 1D массив [samples], получено {y.shape}"
-        
-        print(f"Shapes before training - x: {x.shape}, y: {y.shape}")  # Должно быть (N, seq_len, features) и (N,)
-
-        params = {
-            'model_dim': trial.suggest_int('model_dim', 64, 256),
-            'num_heads': trial.suggest_int('num_heads', 2, 8),
-            'num_layers': trial.suggest_int('num_layers', 2, 6),
-            'learning_rate': trial.suggest_float('learning_rate', 1e-5, 1e-3, log=True),
-            'dropout': trial.suggest_float('dropout', 0.1, 0.5)
-        }
     
         # 3. Разделение данных
         tscv = TimeSeriesSplit(n_splits=3)
@@ -226,7 +197,6 @@ class HyperparameterOptimizer:
             x_train, x_val = x[train_idx], x[val_idx]
             y_train, y_val = y[train_idx], y[val_idx]
         
-            # Преобразование в тензоры с правильной формой
             x_train_tensor = torch.from_numpy(x_train).float().to(self.device)
             y_train_tensor = torch.from_numpy(y_train).float().to(self.device)
             x_val_tensor = torch.from_numpy(x_val).float().to(self.device)
@@ -250,118 +220,112 @@ class HyperparameterOptimizer:
                 optimizer.zero_grad()
             
                 outputs = model(x_train_tensor)
-                
-                # Проверка и корректировка размеров
-                if outputs.dim() == 1:
-                    outputs = outputs.unsqueeze(1)
-                if y_train_tensor.dim() == 1:
-                    y_train_tensor = y_train_tensor.unsqueeze(1)
-                
                 assert outputs.shape == y_train_tensor.shape, \
                     f"Несоответствие размеров: outputs {outputs.shape}, y {y_train_tensor.shape}"
             
                 loss = criterion(outputs, y_train_tensor)
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
         
             # 7. Валидация
             model.eval()
             with torch.no_grad():
                 val_outputs = model(x_val_tensor)
-                
-                # Корректировка размеров для валидации
-                if val_outputs.dim() == 1:
-                    val_outputs = val_outputs.unsqueeze(1)
-                if y_val_tensor.dim() == 1:
-                    y_val_tensor = y_val_tensor.unsqueeze(1)
-                
+                val_loss = criterion(val_outputs, y_val_tensor)
+                val_losses.append(val_loss.item())
+    
+        return np.mean(val_losses)
+
+        # Гарантируем 2D форму
+        y = y.reshape(-1, 1)
+    
+        tscv = TimeSeriesSplit(n_splits=3)
+        val_losses = []
+    
+        for train_idx, val_idx in tscv.split(x):
+            x_train, x_val = x[train_idx], x[val_idx]
+            y_train, y_val = y[train_idx], y[val_idx]
+        
+            # Преобразование с явным контролем формы
+            x_train_tensor = torch.tensor(x_train, dtype=torch.float32).to(self.device)
+            y_train_tensor = torch.tensor(y_train, dtype=torch.float32).view(-1, 1).to(self.device)
+            x_val_tensor = torch.tensor(x_val, dtype=torch.float32).to(self.device)
+            y_val_tensor = torch.tensor(y_val, dtype=torch.float32).view(-1, 1).to(self.device)
+        
+            model = TransformerModel(
+                input_dim=x.shape[-1],
+                model_dim=params['model_dim'],
+                num_heads=params['num_heads'],
+                num_layers=params['num_layers'],
+                output_dim=1
+            ).to(self.device)
+        
+            optimizer = torch.optim.Adam(model.parameters(), lr=params['learning_rate'])
+            criterion = nn.MSELoss()
+        
+            # Обучение
+            model.train()
+            for epoch in range(10):
+                optimizer.zero_grad()
+    
+                # Явное преобразование с контролем формы
+                x_tensor = torch.tensor(x_train, dtype=torch.float32).to(self.device)
+                y_tensor = torch.tensor(y_train, dtype=torch.float32).reshape(-1, 1).to(self.device)  # Критично: reshape вместо unsqueeze
+    
+                outputs = model(x_tensor)
+    
+                # Принудительное выравнивание форм
+                outputs = outputs.view(-1, 1)
+                y_tensor = y_tensor.view(-1, 1)
+    
+                loss = criterion(outputs, y_tensor)
+                loss.backward()
+                optimizer.step()
+        
+            # Валидация
+            model.eval()
+            with torch.no_grad():
+                x_val_tensor = torch.tensor(x_val, dtype=torch.float32).to(self.device)
+                y_val_tensor = torch.tensor(y_val, dtype=torch.float32).reshape(-1, 1).to(self.device)
+    
+                val_outputs = model(x_val_tensor).view(-1, 1)
+                y_val_tensor = y_val_tensor.view(-1, 1)
+    
                 val_loss = criterion(val_outputs, y_val_tensor)
                 val_losses.append(val_loss.item())
     
         return np.mean(val_losses)
         
     def optimize(self, n_trials=50):
-        """Оптимизация гиперпараметров"""
-        try:
-            study = optuna.create_study(
-                direction='minimize',
-                sampler=optuna.samplers.TPESampler(seed=42)
-            )
-            study.optimize(self.objective, n_trials=n_trials, show_progress_bar=True)
-            
-            # Сохраняем лучшие параметры
-            best_params = study.best_params
-            logger.info(f"Лучшие параметры: {best_params}")
-            
-            # Обновляем модель бота
-            self.bot.transformer_model = TransformerModel(
-                input_dim=10,  # Должно соответствовать количеству фичей
-                model_dim=best_params['model_dim'],
-                num_heads=best_params['num_heads'],
-                num_layers=best_params['num_layers'],
-                output_dim=1
-            )
-            
-            # Переобучаем модель с лучшими параметрами на всех данных
-            self._retrain_best_model(best_params)
-            
-            return best_params
-            
-        except Exception as e:
-            logger.error(f"Ошибка оптимизации гиперпараметров: {str(e)}", exc_info=True)
-            return None
-    
-    def _retrain_best_model(self, best_params):
-        """Переобучение модели с лучшими параметрами на всех данных"""
-        try:
-            x, y, _ = self.bot._prepare_transformer_data()
-            if x is None or y is None:
-                logger.error("Не удалось подготовить данные для переобучения")
-                return
-            
-            x_tensor = torch.from_numpy(x).float().to(self.device)
-            y_tensor = torch.from_numpy(y).float().to(self.device)
-            
-            if y_tensor.dim() == 1:
-                y_tensor = y_tensor.unsqueeze(1)
-            
-            model = TransformerModel(
-                input_dim=x.shape[-1],
-                model_dim=best_params['model_dim'],
-                num_heads=best_params['num_heads'],
-                num_layers=best_params['num_layers'],
-                output_dim=1
-            ).to(self.device)
-            
-            optimizer = torch.optim.Adam(model.parameters(), lr=best_params['learning_rate'])
-            criterion = nn.MSELoss()
-            
-            # Обучение на всех данных
-            model.train()
-            for epoch in range(20):
-                optimizer.zero_grad()
-                outputs = model(x_tensor)
-                
-                if outputs.dim() == 1:
-                    outputs = outputs.unsqueeze(1)
-                
-                loss = criterion(outputs, y_tensor)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-                optimizer.step()
-                
-                if (epoch + 1) % 5 == 0:
-                    logger.info(f"Retraining epoch {epoch+1}/20, Loss: {loss.item():.4f}")
-            
-            # Сохраняем переобученную модель
-            self.bot.transformer_model = model.cpu()
-            self.bot.save_model()
-            
-            logger.info("Модель успешно переобучена с лучшими параметрами")
-            
-        except Exception as e:
-            logger.error(f"Ошибка переобучения модели: {str(e)}", exc_info=True)
+        study = optuna.create_study(direction='minimize')
+        study.optimize(self.objective, n_trials=n_trials)
+        
+        # Сохраняем лучшие параметры
+        best_params = study.best_params
+        logger.info(f"Лучшие параметры: {best_params}")
+        
+        # Обновляем модель бота
+        self.bot.transformer_model = TransformerModel(
+            input_dim=10,
+            model_dim=best_params['model_dim'],
+            num_heads=best_params['num_heads'],
+            num_layers=best_params['num_layers'],
+            output_dim=1
+        )
+        
+        return best_params
+
+# 10. Настройка Rich и логирования
+from rich.console import Console
+from rich.logging import RichHandler
+
+# 11. Для Backtesting
+from typing import Dict, List
+from datetime import datetime
+
+# 12. Асинхронные методы обучения модели
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 class SafeConsole(Console):
     """Переопределенный Console с обработкой ошибок вывода"""
@@ -1844,194 +1808,211 @@ class AggressiveFuturesBot:
         self.best_params = study.best_params
 
     def _calculate_indicators(self):
-        """Расчет всех индикаторов с использованием pandas-ta"""
+        """Расчет всех индикаторов с поддержкой TA-Lib, ta и pure Python fallback"""
         try:
-            import pandas_ta as ta
-            
             # Проверка наличия базовых колонок
             required_cols = ['open', 'high', 'low', 'close', 'volume']
             if not all(col in self.data.columns for col in required_cols):
                 raise ValueError("Отсутствуют базовые колонки OHLCV")
 
-            # Рассчитываем все индикаторы с помощью pandas-ta
-            closes = self.data['close']
-            highs = self.data['high']
-            lows = self.data['low']
-            volumes = self.data['volume']
-
-            # MACD (возвращает DataFrame с несколькими колонками)
-            macd_result = ta.macd(closes, fast=12, slow=26, signal=9)
-            if macd_result is not None:
-                self.data['macd'] = macd_result[f'MACD_12_26_9']
-                self.data['macd_signal'] = macd_result[f'MACDs_12_26_9']
-                # macd_hist = macd_result[f'MACDh_12_26_9']  # гистограмму можно тоже сохранить если нужно
-
-            # RSI
-            rsi_result = ta.rsi(closes, length=14)
-            if rsi_result is not None:
-                self.data['rsi'] = rsi_result
-
-            # ATR (Average True Range)
-            atr_result = ta.atr(highs, lows, closes, length=14)
-            if atr_result is not None:
-                self.data['atr'] = atr_result
-
-            # OBV (On Balance Volume)
-            obv_result = ta.obv(closes, volumes)
-            if obv_result is not None:
-                self.data['obv'] = obv_result
-
-            # Stochastic
-            stoch_result = ta.stoch(highs, lows, closes, k=14, d=3, smooth_k=3)
-            if stoch_result is not None:
-                self.data['stoch_k'] = stoch_result['STOCHk_14_3_3']
-                self.data['stoch_d'] = stoch_result['STOCHd_14_3_3']
-
-            # CCI (Commodity Channel Index)
-            cci_result = ta.cci(highs, lows, closes, length=14)
-            if cci_result is not None:
-                self.data['cci'] = cci_result
-
-            # Bollinger Bands
-            bb_result = ta.bbands(closes, length=20, std=2)
-            if bb_result is not None:
-                self.data['bbands_upper'] = bb_result['BBU_20_2.0']
-                self.data['bbands_middle'] = bb_result['BBM_20_2.0']
-                self.data['bbands_lower'] = bb_result['BBL_20_2.0']
-
-            # ADX (Average Directional Index)
-            adx_result = ta.adx(highs, lows, closes, length=14)
-            if adx_result is not None:
-                self.data['adx'] = adx_result['ADX_14']
-
-            # EMA (Exponential Moving Average)
-            ema5_result = ta.ema(closes, length=5)
-            if ema5_result is not None:
-                self.data['ema5'] = ema5_result
-
-            ema10_result = ta.ema(closes, length=10)
-            if ema10_result is not None:
-                self.data['ema10'] = ema10_result
-
-            # Volume indicators
-            self.data['volume_ma'] = volumes.rolling(20).mean()
-            self.data['volume_spike'] = (volumes > 1.5 * self.data['volume_ma']).astype(int)
-
-            # VWAP (Volume Weighted Average Price)
-            # Для VWAP нужно использовать отдельную функцию, так как pandas-ta требует high, low, close, volume
-            vwap_result = ta.vwap(highs, lows, closes, volumes)
-            if vwap_result is not None:
-                self.data['vwap'] = vwap_result
+            # Рассчитываем все индикаторы в зависимости от доступности библиотек
+            if TALIB_AVAILABLE:
+                logger.info("Using TA-Lib for indicators")
+                self._calculate_indicators_talib()
+            elif TA_AVAILABLE:
+                logger.info("Using 'ta' library for indicators")
+                self._calculate_indicators_ta()
             else:
-                # Fallback расчет VWAP
-                typical_price = (highs + lows + closes) / 3
-                self.data['vwap'] = (typical_price * volumes).cumsum() / volumes.cumsum()
+                logger.warning("Using pure Python indicator implementations")
+                self._calculate_indicators_python()
 
-            # Дополнительные индикаторы для улучшения стратегии
-            # Williams %R
-            willr_result = ta.willr(highs, lows, closes, length=14)
-            if willr_result is not None:
-                self.data['willr'] = willr_result
-
-            # Momentum
-            momentum_result = ta.mom(closes, length=10)
-            if momentum_result is not None:
-                self.data['momentum'] = momentum_result
-
-            # Rate of Change (ROC)
-            roc_result = ta.roc(closes, length=12)
-            if roc_result is not None:
-                self.data['roc'] = roc_result
-
-            # Заполнение NaN значений
-            self.data = self.data.ffill().bfill().fillna(0)
-
-            # Проверка наличия всех необходимых колонок
-            required_indicators = [
-                'macd', 'macd_signal', 'rsi', 'stoch_k', 'stoch_d', 
-                'cci', 'bbands_middle', 'adx', 'ema5', 'ema10',
-                'volume_spike', 'vwap'
-            ]
+            # EMA (работает одинаково для всех вариантов)
+            self.data['ema5'] = self.data['close'].ewm(span=5, adjust=False).mean()
+            self.data['ema10'] = self.data['close'].ewm(span=10, adjust=False).mean()
             
-            # Создаем отсутствующие колонки с нулевыми значениями
-            for indicator in required_indicators:
-                if indicator not in self.data.columns:
-                    logger.warning(f"Индикатор {indicator} не рассчитан, создаю нулевую колонку")
-                    self.data[indicator] = 0.0
-
-            missing = [ind for ind in required_indicators if ind not in self.data.columns]
-            if missing:
-                logger.warning(f"Отсутствуют индикаторы: {missing}")
-
-            logger.info("Все индикаторы успешно рассчитаны с помощью pandas-ta")
-            return True
-            
-        except ImportError:
-            logger.error("pandas-ta не установлен. Использую базовые индикаторы.")
-            return self._calculate_basic_indicators()
-        except Exception as e:
-            logger.error(f"Ошибка расчета индикаторов с pandas-ta: {str(e)}", exc_info=True)
-            return False
-
-    def _calculate_basic_indicators(self):
-        """Резервный метод расчета базовых индикаторов без внешних библиотек"""
-        try:
-            # Базовые индикаторы на чистом pandas
-            closes = self.data['close']
-            highs = self.data['high']
-            lows = self.data['low']
-            volumes = self.data['volume']
-
-            # EMA
-            self.data['ema5'] = closes.ewm(span=5, adjust=False).mean()
-            self.data['ema10'] = closes.ewm(span=10, adjust=False).mean()
-
-            # RSI (упрощенная версия)
-            delta = closes.diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-            rs = gain / loss
-            self.data['rsi'] = 100 - (100 / (1 + rs))
-
-            # MACD (упрощенная версия)
-            ema12 = closes.ewm(span=12, adjust=False).mean()
-            ema26 = closes.ewm(span=26, adjust=False).mean()
-            self.data['macd'] = ema12 - ema26
-            self.data['macd_signal'] = self.data['macd'].ewm(span=9, adjust=False).mean()
-
-            # Bollinger Bands
-            self.data['bbands_middle'] = closes.rolling(window=20).mean()
-            bb_std = closes.rolling(window=20).std()
-            self.data['bbands_upper'] = self.data['bbands_middle'] + (bb_std * 2)
-            self.data['bbands_lower'] = self.data['bbands_middle'] - (bb_std * 2)
-
             # Volume indicators
-            self.data['volume_ma'] = volumes.rolling(20).mean()
-            self.data['volume_spike'] = (volumes > 1.5 * self.data['volume_ma']).astype(int)
-
+            self.data['volume_ma'] = self.data['volume'].rolling(20).mean()
+            self.data['volume_spike'] = (self.data['volume'] > 1.5 * self.data['volume_ma']).astype(int)
+            
             # VWAP
+            highs = self.data['high'].values
+            lows = self.data['low'].values  
+            closes = self.data['close'].values
+            volumes = self.data['volume'].values
             typical_price = (highs + lows + closes) / 3
             self.data['vwap'] = (typical_price * volumes).cumsum() / volumes.cumsum()
-
-            # Stochastic (упрощенная версия)
-            lowest_low = lows.rolling(window=14).min()
-            highest_high = highs.rolling(window=14).max()
-            self.data['stoch_k'] = 100 * ((closes - lowest_low) / (highest_high - lowest_low))
-            self.data['stoch_d'] = self.data['stoch_k'].rolling(window=3).mean()
-
-            # Заполняем остальные обязательные колонки нулями
-            for col in ['atr', 'obv', 'cci', 'adx']:
-                if col not in self.data.columns:
-                    self.data[col] = 0.0
-
+            
+            # Заполнение NaN
             self.data = self.data.ffill().bfill().fillna(0)
             
-            logger.info("Базовые индикаторы рассчитаны с помощью pandas")
+            # Проверка наличия всех необходимых колонок
+            required_indicators = ['macd', 'macd_signal', 'rsi', 'stoch_k', 'stoch_d', 
+                                'cci', 'bbands_middle', 'adx', 'ema5', 'ema10',
+                                'volume_spike', 'vwap']
+            
+            missing = [ind for ind in required_indicators if ind not in self.data.columns]
+            if missing:
+                raise ValueError(f"Отсутствуют индикаторы: {missing}")
+            
+            logger.info("Все индикаторы успешно рассчитаны")
             return True
             
         except Exception as e:
-            logger.error(f"Ошибка расчета базовых индикаторов: {str(e)}", exc_info=True)
+            logger.error(f"Ошибка расчета индикаторов: {str(e)}", exc_info=True)
             return False
+
+    def _calculate_indicators_talib(self):
+        """Расчет индикаторов через TA-Lib"""
+        closes = self.data['close'].ffill().values
+        highs = self.data['high'].ffill().values
+        lows = self.data['low'].ffill().values
+        volumes = self.data['volume'].fillna(0).values
+
+        # MACD
+        macd, macd_signal, _ = talib.MACD(closes)
+        self.data['macd'] = macd
+        self.data['macd_signal'] = macd_signal
+            
+        # Другие индикаторы
+        self.data['rsi'] = talib.RSI(closes, timeperiod=14)
+        self.data['atr'] = talib.ATR(highs, lows, closes, timeperiod=14)
+        self.data['obv'] = talib.OBV(closes, volumes)
+            
+        # Stochastic
+        slowk, slowd = talib.STOCH(highs, lows, closes,
+                                fastk_period=5, slowk_period=3,
+                                slowd_period=3, slowk_matype=0, slowd_matype=0)
+        self.data['stoch_k'] = slowk
+        self.data['stoch_d'] = slowd
+            
+        # Остальные индикаторы
+        self.data['cci'] = talib.CCI(highs, lows, closes, timeperiod=14)
+        upper, middle, lower = talib.BBANDS(closes, timeperiod=20)
+        self.data['bbands_middle'] = middle
+        self.data['adx'] = talib.ADX(highs, lows, closes, timeperiod=14)
+
+    def _calculate_indicators_ta(self):
+        """Расчет индикаторов через библиотеку ta"""
+        import ta
+        
+        df = self.data.copy()
+        
+        # MACD
+        macd_indicator = ta.trend.MACD(df['close'])
+        self.data['macd'] = macd_indicator.macd()
+        self.data['macd_signal'] = macd_indicator.macd_signal()
+        
+        # RSI
+        self.data['rsi'] = ta.momentum.RSIIndicator(df['close']).rsi()
+        
+        # ATR
+        self.data['atr'] = ta.volatility.AverageTrueRange(df['high'], df['low'], df['close']).average_true_range()
+        
+        # OBV
+        self.data['obv'] = ta.volume.OnBalanceVolumeIndicator(df['close'], df['volume']).on_balance_volume()
+        
+        # Stochastic
+        stoch = ta.momentum.StochasticOscillator(df['high'], df['low'], df['close'])
+        self.data['stoch_k'] = stoch.stoch()
+        self.data['stoch_d'] = stoch.stoch_signal()
+        
+        # CCI
+        self.data['cci'] = ta.trend.CCIIndicator(df['high'], df['low'], df['close']).cci()
+        
+        # Bollinger Bands
+        bollinger = ta.volatility.BollingerBands(df['close'])
+        self.data['bbands_middle'] = bollinger.bollinger_mavg()
+        
+        # ADX
+        self.data['adx'] = ta.trend.ADXIndicator(df['high'], df['low'], df['close']).adx()
+
+    def _calculate_indicators_python(self):
+        """Pure Python реализации индикаторов"""
+        closes = self.data['close'].ffill().values
+        highs = self.data['high'].ffill().values
+        lows = self.data['low'].ffill().values
+        volumes = self.data['volume'].fillna(0).values
+        
+        # MACD (Python реализация)
+        def calculate_macd_python(prices, fast=12, slow=26, signal=9):
+            ema_fast = pd.Series(prices).ewm(span=fast).mean()
+            ema_slow = pd.Series(prices).ewm(span=slow).mean()
+            macd = ema_fast - ema_slow
+            signal_line = macd.ewm(span=signal).mean()
+            return macd, signal_line, macd - signal_line
+        
+        macd, macd_signal, _ = calculate_macd_python(closes)
+        self.data['macd'] = macd
+        self.data['macd_signal'] = macd_signal
+        
+        # RSI (Python реализация)
+        def calculate_rsi_python(prices, period=14):
+            deltas = np.diff(prices)
+            gains = np.where(deltas > 0, deltas, 0)
+            losses = np.where(deltas < 0, -deltas, 0)
+            
+            avg_gains = pd.Series(gains).rolling(period).mean()
+            avg_losses = pd.Series(losses).rolling(period).mean()
+            
+            rs = avg_gains / avg_losses
+            rsi = 100 - (100 / (1 + rs))
+            return rsi
+        
+        self.data['rsi'] = calculate_rsi_python(closes)
+        
+        # ATR (Python реализация)
+        def calculate_atr_python(high, low, close, period=14):
+            tr = np.maximum(high - low, 
+                        np.maximum(np.abs(high - close), 
+                                    np.abs(low - close)))
+            atr = pd.Series(tr).rolling(period).mean()
+            return atr
+        
+        self.data['atr'] = calculate_atr_python(highs, lows, closes)
+        
+        # OBV (Python реализация)
+        def calculate_obv_python(close, volume):
+            obv = [0]
+            for i in range(1, len(close)):
+                if close[i] > close[i-1]:
+                    obv.append(obv[-1] + volume[i])
+                elif close[i] < close[i-1]:
+                    obv.append(obv[-1] - volume[i])
+                else:
+                    obv.append(obv[-1])
+            return obv
+        
+        self.data['obv'] = calculate_obv_python(closes, volumes)
+        
+        # Stochastic (упрощенная Python реализация)
+        def calculate_stoch_python(high, low, close, k_period=14, d_period=3):
+            lowest_low = pd.Series(low).rolling(k_period).min()
+            highest_high = pd.Series(high).rolling(k_period).max()
+            
+            stoch_k = 100 * (close - lowest_low) / (highest_high - lowest_low)
+            stoch_d = stoch_k.rolling(d_period).mean()
+            return stoch_k, stoch_d
+        
+        stoch_k, stoch_d = calculate_stoch_python(highs, lows, closes)
+        self.data['stoch_k'] = stoch_k
+        self.data['stoch_d'] = stoch_d
+        
+        # CCI (упрощенная реализация)
+        self.data['cci'] = 0  # Упрощенно
+        
+        # Bollinger Bands (Python реализация)
+        def calculate_bbands_python(prices, period=20, std=2):
+            sma = pd.Series(prices).rolling(period).mean()
+            rolling_std = pd.Series(prices).rolling(period).std()
+            upper = sma + (rolling_std * std)
+            lower = sma - (rolling_std * std)
+            return sma, upper, lower
+        
+        bbands_middle, _, _ = calculate_bbands_python(closes)
+        self.data['bbands_middle'] = bbands_middle
+        
+        # ADX (упрощенная реализация)
+        self.data['adx'] = 0  # Упрощенно
 
     def _calculate_extended_indicators(self):
         """Расчёт дополнительных индикаторов"""
