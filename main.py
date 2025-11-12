@@ -728,7 +728,7 @@ class AggressiveFuturesBot:
             
             # Агрессивные параметры торговли
             self.symbol = "BTCUSDT"
-            self.leverage = 100  # среднее плечо
+            self.leverage = 30  # среднее плечо
             self.interval = Client.KLINE_INTERVAL_5MINUTE  # Более короткий таймфрейм
             self.risk_percent = 0.3  # Средний риск на сделку
             self.take_profit = 0.01  # 1.0% тейк-профит
@@ -3135,4 +3135,4 @@ if __name__ == "__main__":
             try:
                 bot._send_telegram_alert("🔴 Бот остановлен")
             except Exception as alert_error:
-                console.print(f"⚠️ Не удалось отправить уведомление: {str(alert_error)}", style="bold yellow")
+                console.print(f"⚠️ Не удалось отправить уведомление: {str(alert_error)}", style="bold yellow")    
