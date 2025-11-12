@@ -1,18 +1,1 @@
-# Без версий - pip сам выберет совместимые
-pandas
-numpy
-matplotlib
-scikit-learn
-requests
-python-dotenv
-python-binance
-websocket-client
-torch
-torchvision
-torchaudio
---index-url https://download.pytorch.org/whl/cpu
-optuna
-ta
-rich
-mplfinance
-plotly
+
