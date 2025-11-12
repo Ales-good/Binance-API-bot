@@ -707,7 +707,7 @@ class AggressiveFuturesBot:
             
             # Агрессивные параметры торговли
             self.symbol = "BTCUSDT"
-            self.leverage = 100
+            self.leverage = 50
             self.interval = Client.KLINE_INTERVAL_5MINUTE
             self.risk_percent = 0.3
             self.take_profit = 0.01
