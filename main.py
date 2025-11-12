@@ -3135,4 +3135,4 @@ if __name__ == "__main__":
             try:
                 bot._send_telegram_alert("🔴 Бот остановлен")
             except Exception as alert_error:
-                console.print(f"⚠️ Не удалось отправить уведомление: {str(alert_error)}", style="bold yellow")    
+                console.print(f"⚠️ Не удалось отправить уведомление: {str(alert_error)}", style="bold yellow")
