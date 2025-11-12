@@ -10,7 +10,13 @@ WORKDIR /app
 
 COPY requirements.txt .
 RUN pip install --upgrade pip
-RUN pip install -r requirements.txt
+
+# Сначала устанавливаем все пакеты кроме PyTorch
+RUN pip install pandas numpy matplotlib scikit-learn requests python-dotenv \
+                python-binance websocket-client optuna ta rich mplfinance plotly
+
+# Затем устанавливаем PyTorch с отдельным index
+RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
 
 COPY . .
 RUN mkdir -p models logs data
