@@ -680,15 +680,37 @@ class AggressiveFuturesBot:
             load_dotenv()
             self._check_env_vars()
             
-            self.client = Client(
-                os.getenv('BINANCE_API_KEY'), 
-                os.getenv('BINANCE_SECRET_KEY'),
-                testnet=False
-            )
+            # Проверяем API ключи перед созданием клиента
+            api_key = os.getenv('BINANCE_API_KEY')
+            secret_key = os.getenv('BINANCE_SECRET_KEY')
+            
+            if not api_key or not secret_key:
+                raise ValueError("API ключи не найдены в переменных окружения")
+            
+            logger.info(f"API Key: {api_key[:10]}...")
+            logger.info(f"Secret Key: {secret_key[:10]}...")
+            
+            # Пробуем подключиться к Binance
+            try:
+                self.client = Client(api_key, secret_key, testnet=False)
+                # Тестовый запрос для проверки подключения
+                self.client.futures_exchange_info()
+                logger.info("✅ Подключение к Binance Futures успешно")
+            except Exception as e:
+                logger.error(f"❌ Ошибка подключения к Futures: {e}")
+                # Пробуем testnet для диагностики
+                try:
+                    self.client = Client(api_key, secret_key, testnet=True)
+                    self.client.futures_exchange_info()
+                    logger.info("✅ Подключение к Binance Testnet успешно")
+                    logger.warning("⚠️ Используется TESTNET для отладки")
+                except Exception as testnet_error:
+                    logger.error(f"❌ Ошибка подключения к Testnet: {testnet_error}")
+                    raise ValueError("Не удалось подключиться ни к mainnet, ни к testnet. Проверьте API ключи.")
             
             self.ws_manager = ThreadedWebsocketManager(
-                api_key=os.getenv('BINANCE_API_KEY'),
-                api_secret=os.getenv('BINANCE_SECRET_KEY')
+                api_key=api_key,
+                api_secret=secret_key
             )
             
             # Агрессивные параметры торговли
@@ -717,26 +739,26 @@ class AggressiveFuturesBot:
             self.last_candle_time = None
             self.transformer_model = None
             self.scaler = None
+            
+            # Инициализация модели - только ОДИН раз
             try:
-                self.load_model()  # Сначала пробуем загрузить сохранённую модель
-                if not hasattr(self, 'transformer_model') or self.transformer_model is None:
+                if self.load_model():
+                    logger.info("✅ Модель успешно загружена")
+                else:
+                    logger.warning("Файл модели не найден, создаю новую модель")
                     self._init_new_model()
-                    logger.info("Запускаю обучение на исторических данных...")
-                    self.train_model()  # Автоматическое обучение при первом запуске
             except Exception as e:
                 logger.warning(f"Не удалось загрузить модель: {str(e)}")
                 self._init_new_model()
-                self.train_model()  # Обучение новой модели при ошибке
-            try:
-                self.load_model()  # +++ Добавлено +++ Пытаемся загрузить модель
-            except Exception as e:
-                logger.warning(f"Не удалось загрузить модель: {str(e)}")
+            
             self.min_qty = 0.001  # Минимальный размер ордера для BTCUSDT
             
+            # Настройка обработчиков сигналов
             signal.signal(signal.SIGINT, self._handle_shutdown)
             signal.signal(signal.SIGTERM, self._handle_shutdown)
             
             logger.info("Агрессивный-осторожный бот инициализирован")
+            
         except Exception as e:
             logger.error(f"Ошибка инициализации: {str(e)}", exc_info=True)
             self._send_telegram_alert(f"❌ Ошибка инициализации агрессивного бота: {str(e)}")
@@ -2798,42 +2820,21 @@ class AggressiveFuturesBot:
             return False
         
     def save_model(self, path='transformer_model.pth'):
-        """Сохраняет модель с конфигурацией"""
+        """Упрощенное сохранение модели"""
         try:
             if not hasattr(self, 'transformer_model') or self.transformer_model is None:
                 logger.error("Модель не инициализирована для сохранения")
                 return False
 
-            # Фиксированная конфигурация (должна совпадать с _init_new_model)
-            model_config = {
-                'input_dim': 10,
-                'model_dim': 128,
-                'num_heads': 4,
-                'num_layers': 2,
-                'output_dim': 1
-            }
-
-            save_data = {
+            # Убираем создание директории для простого пути
+            torch.save({
                 'model_state_dict': self.transformer_model.state_dict(),
-                'model_config': model_config,
                 'scaler_mean': getattr(self.scaler, 'mean_', None),
                 'scaler_scale': getattr(self.scaler, 'scale_', None)
-            }
-
-            # Создаем директорию если нужно
-            os.makedirs(os.path.dirname(path), exist_ok=True)
-        
-            torch.save(save_data, path)
-            logger.info(f"Модель успешно сохранена в {path}")
+            }, path)
             
-            # Верификация
-            if os.path.exists(path):
-                size = os.path.getsize(path)
-                logger.info(f"Модель успешно сохранена! Размер: {size} байт")
-                return True
-            else:
-                logger.error("Файл не появился после сохранения!")
-                return False
+            logger.info(f"Модель успешно сохранена в {path}")
+            return True
 
         except Exception as e:
             logger.error(f"Ошибка сохранения модели: {str(e)}", exc_info=True)
