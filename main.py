@@ -11,17 +11,38 @@ import signal
 import logging
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
-import time  # Для задержек между запросами
 from sklearn.preprocessing import StandardScaler, MinMaxScaler, RobustScaler
 
 # 2. Импорты Rich для логирования
 from rich.console import Console
 from rich.logging import RichHandler
 
+# 3. Определяем SafeConsole перед использованием
+class SafeConsole(Console):
+    """Переопределенный Console с обработкой ошибок вывода"""
+    def print(self, *args, **kwargs):
+        try:
+            super().print(*args, **kwargs)
+        except (ValueError, AttributeError):
+            sys.stdout.write(str(args) + "\n")
 
-
-
-
+# 4. Настройка логирования
+def configure_logging():
+    """Безопасная настройка системы логирования"""
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        handlers=[
+            logging.FileHandler('bot.log', encoding='utf-8', mode='w'),
+            RichHandler(
+                console=SafeConsole(force_terminal=False),
+                show_path=False,
+                rich_tracebacks=True
+            )
+        ],
+        force=True
+    )
+    logging.captureWarnings(True)
 
 # 5. Инициализация логгера и консоли
 configure_logging()
@@ -32,14 +53,18 @@ console = SafeConsole()  # Теперь SafeConsole определен
 import requests
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import RobustScaler
 from dotenv import load_dotenv
-import talib
 import torch
 import torch.nn as nn
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.model_selection import train_test_split
 from binance import ThreadedWebsocketManager
 from binance.client import Client
+from binance.enums import *
+from binance.exceptions import BinanceAPIException
+from io import BytesIO
+from matplotlib.animation import FuncAnimation
+import optuna
+from sklearn.model_selection import TimeSeriesSplit
 
 # 7. Фиксы для Windows
 if sys.platform == "win32":
@@ -52,27 +77,6 @@ if sys.platform == "win32":
 import matplotlib
 matplotlib.use('Agg')  # Неинтерактивный бэкенд
 import matplotlib.pyplot as plt
-
-# 9. Импорт остальных библиотек
-import requests
-import pandas as pd
-import numpy as np
-from dotenv import load_dotenv
-import talib
-import torch
-import torch.nn as nn
-from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler
-from binance import ThreadedWebsocketManager
-from binance.client import Client
-from binance.enums import *
-from binance.exceptions import BinanceAPIException
-from io import BytesIO
-
-from matplotlib.animation import FuncAnimation
-import optuna
-from sklearn.model_selection import TimeSeriesSplit
-
 
 # Railway-specific fixes
 import os
@@ -130,33 +134,7 @@ except ImportError:
         atr = pd.Series(tr).rolling(period).mean()
         return atr
 
-
-# 3. Определяем SafeConsole перед использованием
-class SafeConsole(Console):
-    """Переопределенный Console с обработкой ошибок вывода"""
-    def print(self, *args, **kwargs):
-        try:
-            super().print(*args, **kwargs)
-        except (ValueError, AttributeError):
-            sys.stdout.write(str(args) + "\n")
-
-# 4. Настройка логирования
-def configure_logging():
-    """Безопасная настройка системы логирования"""
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        handlers=[
-            logging.FileHandler('bot.log', encoding='utf-8', mode='w'),
-            RichHandler(
-                console=SafeConsole(force_terminal=False),
-                show_path=False,
-                rich_tracebacks=True
-            )
-        ],
-        force=True
-    )
-    logging.captureWarnings(True)
+# ... остальной код классов и функций
 
 
 class HyperparameterOptimizer:
