@@ -8,15 +8,23 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /app
 
-COPY requirements.txt .
+# Устанавливаем пакеты по одному для надежности
 RUN pip install --upgrade pip
 
-# Сначала устанавливаем все пакеты кроме PyTorch
-RUN pip install pandas numpy matplotlib scikit-learn requests python-dotenv \
-                python-binance websocket-client optuna ta rich mplfinance plotly
+# Базовые пакеты
+RUN pip install pandas numpy matplotlib scikit-learn requests python-dotenv
 
-# Затем устанавливаем PyTorch с отдельным index
+# Торговые пакеты
+RUN pip install python-binance websocket-client
+
+# Машинное обучение
 RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+
+# Анализ и визуализация
+RUN pip install optuna ta rich mplfinance plotly
+
+# SHAP и LIME (опционально, можно закомментировать если проблемы)
+RUN pip install shap lime
 
 COPY . .
 RUN mkdir -p models logs data
