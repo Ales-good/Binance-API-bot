@@ -2804,13 +2804,13 @@ class AggressiveFuturesBot:
                 logger.error("Модель не инициализирована для сохранения")
                 return False
 
-            # Сохраняем конфигурацию модели
+            # Фиксированная конфигурация (должна совпадать с _init_new_model)
             model_config = {
-                'num_layers': self.transformer_model.num_layers,
-                'model_dim': self.transformer_model.model_dim,
-                'num_heads': self.transformer_model.num_heads,
-                'input_dim': self.transformer_model.input_dim,
-                'output_dim': self.transformer_model.output_dim
+                'input_dim': 10,
+                'model_dim': 128,
+                'num_heads': 4,
+                'num_layers': 2,
+                'output_dim': 1
             }
 
             save_data = {
@@ -2824,12 +2824,11 @@ class AggressiveFuturesBot:
             os.makedirs(os.path.dirname(path), exist_ok=True)
         
             torch.save(save_data, path)
-            logger.info(f"Модель успешно сохранена в {path} с конфигурацией {model_config}")
-            return True
-
+            logger.info(f"Модель успешно сохранена в {path}")
+            
             # Верификация
-            if os.path.exists(full_path):
-                size = os.path.getsize(full_path)
+            if os.path.exists(path):
+                size = os.path.getsize(path)
                 logger.info(f"Модель успешно сохранена! Размер: {size} байт")
                 return True
             else:
